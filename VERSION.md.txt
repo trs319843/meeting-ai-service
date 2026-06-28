@@ -1,32 +1,27 @@
 AI Meeting Assistant
 
-Version: 0.8 MVP
-Date: 2026-06-18
+Version: 0.9.1 MVP
 
-Implemented Features
---------------------
+Completed
+---------
 ✓ Meeting Upload
-✓ Transcript Generation
-✓ Transcript Viewer
-✓ Summary Generation
-✓ Summary Viewer
-✓ Action Items
-✓ Decisions
-✓ Search Across Meetings
+✓ AI Transcription
+✓ AI Summary
+✓ Decision Extraction
+✓ Structured Action Items
+✓ Owner Extraction
+✓ Due Date Extraction
+✓ Search
+✓ Meeting Workspace
+✓ Dashboard Summary
 ✓ Action Items Dashboard
-✓ Dashboard Summary Cards
-✓ Unified Meeting Details Page
-
-Known Issues
-------------
-- Name correction (Tilak → The luck)
-- Decision extraction prompt tuning
-- APEX Free Service storage limitations
+✓ Mark Complete
+✓ Reopen
 
 Next Sprint
 -----------
-- Action Item Tracking Table
-- Mark Complete / Reopen
-- Owner Assignment
-- Owner-based Filtering
+- Status Colors
+- Dashboard Analytics
+- Email Summary
 - OCI Migration
+- Speaker Identification
