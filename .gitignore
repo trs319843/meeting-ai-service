@@ -3,3 +3,4 @@
 /backups
 /docs
 /__pycache__
+.env
