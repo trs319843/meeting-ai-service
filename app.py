@@ -1,3 +1,4 @@
+from dotenv import load_dotenv
 from fastapi import FastAPI, UploadFile, File, Request, Header
 from faster_whisper import WhisperModel
 import tempfile
@@ -7,6 +8,10 @@ from pydantic import BaseModel
 import requests
 import json
 
+load_dotenv()
+MEETINGBAAS_API_KEY = os.getenv("MEETINGBAAS_API_KEY")
+BOT_RESULTS = {}
+
 app = FastAPI()
 
 model = WhisperModel(
@@ -14,6 +19,23 @@ model = WhisperModel(
     device="cpu",
     compute_type="int8"
 )
+
+CORRECTIONS = {
+    "Telek": "Tilak",
+    "The luck": "Tilak",
+    "Olima": "Ollama",
+    "Oracle Apex": "Oracle APEX",
+    "Fast API": "FastAPI",
+    "meat pilot": "MeetPilot",
+    "Meat pilot": "MeetPilot",
+    "meat pilot bought": "MeetPilot Bot",
+    "Meat pilot bought": "MeetPilot Bot"
+}
+
+def apply_corrections(text: str) -> str:
+    for wrong, correct in CORRECTIONS.items():
+        text = text.replace(wrong, correct)
+    return text
 
 @app.get("/health")
 def health():
@@ -57,17 +79,8 @@ async def transcribe(file: UploadFile = File(...)):
                 "text": segment.text.strip()
             })
 
-        CORRECTIONS = {
-            "Telek": "Tilak",
-            "The luck": "Tilak",
-            "Olima": "Ollama",
-            "Oracle Apex": "Oracle APEX",
-            "Fast API": "FastAPI"
-        }
-
         for segment in transcript_segments:
-            for wrong, correct in CORRECTIONS.items():
-                segment["text"] = segment["text"].replace(wrong, correct)
+            segment["text"] = apply_corrections(segment["text"])
 
         full_transcript = " ".join(
             segment["text"]
@@ -119,17 +132,8 @@ async def transcribe_blob(
                 "text": segment.text.strip()
             })
 
-        CORRECTIONS = {
-            "Telek": "Tilak",
-            "The luck": "Tilak",
-            "Olima": "Ollama",
-            "Oracle Apex": "Oracle APEX",
-            "Fast API": "FastAPI"
-        }
-
         for segment in transcript_segments:
-            for wrong, correct in CORRECTIONS.items():
-                segment["text"] = segment["text"].replace(wrong, correct)
+            segment["text"] = apply_corrections(segment["text"])
 
         full_transcript = " ".join(
             segment["text"] for segment in transcript_segments
@@ -220,3 +224,136 @@ Transcript:
 
     result = response.json()
     return json.loads(result["response"])
+
+MEETINGBAAS_API_KEY = os.getenv("MEETINGBAAS_API_KEY")
+
+class ScheduleBotRequest(BaseModel):
+    meeting_id: int | None = None
+    meeting_url: str
+    bot_name: str = "MeetPilot Bot"
+    webhook_url: str | None = None
+
+@app.post("/schedule-bot")
+def schedule_bot(request: ScheduleBotRequest):
+    if not MEETINGBAAS_API_KEY:
+        return {"success": False, "error": "MEETINGBAAS_API_KEY is not set"}
+
+    payload = {
+        "meeting_url": request.meeting_url,
+        "bot_name": request.bot_name,
+        "speech_to_text": "Gladia",
+        "callback_enabled": True,
+        "callback_config": {
+            "url": request.webhook_url,
+            "method": "POST",
+            "secret": "meetpilot-dev-secret"
+        }
+    }
+
+    response = requests.post(
+        "https://api.meetingbaas.com/v2/bots",
+        headers={
+            "x-meeting-baas-api-key": MEETINGBAAS_API_KEY,
+            "Content-Type": "application/json"
+        },
+        json=payload,
+        timeout=60
+    )
+
+    return {
+        "success": response.status_code in (200, 201, 202),
+        "meeting_id": request.meeting_id,
+        "status_code": response.status_code,
+        "response": response.json() if response.text else None
+    }
+
+
+@app.post("/meetingbaas/webhook")
+async def meetingbaas_webhook(request: Request):
+    payload = await request.json()
+
+    event = payload.get("event")
+    data = payload.get("data", {})
+
+    if event != "bot.completed":
+        return {
+            "success": True,
+            "message": "Ignored event",
+            "event": event
+        }
+
+    bot_id = data.get("bot_id")
+    audio_url = data.get("audio")
+    duration_seconds = data.get("duration_seconds")
+
+    if not bot_id:
+        return {"success": False, "error": "No bot_id received"}
+
+    if not audio_url:
+        return {"success": False, "error": "No audio URL received"}
+
+    audio_response = requests.get(audio_url, timeout=300)
+    audio_response.raise_for_status()
+
+    temp_path = None
+
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".flac") as tmp:
+            tmp.write(audio_response.content)
+            temp_path = tmp.name
+
+        segments, info = model.transcribe(temp_path)
+
+        transcript_segments = []
+
+        for segment in segments:
+            text = segment.text.strip()
+            text = apply_corrections(text)
+
+            transcript_segments.append({
+                "start": round(segment.start, 2),
+                "end": round(segment.end, 2),
+                "text": text
+            })
+
+        full_transcript = " ".join(
+            segment["text"] for segment in transcript_segments
+        )
+
+        BOT_RESULTS[bot_id] = {
+            "bot_id": bot_id,
+            "duration_seconds": duration_seconds,
+            "language": info.language,
+            "transcript": full_transcript,
+            "segments": transcript_segments,
+            "raw_payload": payload
+        }
+
+        print("Bot completed:", bot_id)
+        print("Transcript:", full_transcript)
+
+        return {
+            "success": True,
+            "bot_id": bot_id,
+            "message": "Transcript processed"
+        }
+
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+@app.get("/bot-result/{bot_id}")
+def get_bot_result(bot_id: str):
+    result = BOT_RESULTS.get(bot_id)
+
+    if not result:
+        return {
+            "success": False,
+            "error": "Bot result not found",
+            "bot_id": bot_id
+        }
+
+    return {
+        "success": True,
+        "result": result
+    }
